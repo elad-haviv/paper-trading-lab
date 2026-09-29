@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>🧪 Paper Trading Lab</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root{--navy:#0e1a33;--navy2:#1d3a6b;--green:#1a7f37;--red:#c62828;--amber:#b26a00;--muted:#667;--line:#e3e6ea;--bg:#f4f6f9}
+*{box-sizing:border-box}
+body{margin:0;font-family:'Segoe UI',Helvetica,Arial,sans-serif;background:var(--bg);color:#222}
+header{background:linear-gradient(135deg,var(--navy),var(--navy2));color:#fff;padding:20px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+header h1{margin:0;font-size:22px}
+header .gen{font-size:12px;opacity:.8}
+main{max-width:1100px;margin:0 auto;padding:18px 14px 60px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:18px}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center}
+.kpi .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.kpi .v{font-size:20px;font-weight:700;margin-top:4px}
+.pos .v{color:var(--green)}.neg .v{color:var(--red)}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin-bottom:18px}
+.card h2{margin:0 0 10px;font-size:16px;color:var(--navy)}
+.chartbox{position:relative;height:340px}
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:11px;font-weight:700;color:#fff}
+.buy{background:var(--green)}.sell{background:var(--red)}.hold{background:var(--amber)}
+.open{background:var(--navy2)}.closed{background:#888}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:#eef1f5;text-align:left;padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#445;position:sticky;top:0}
+td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:nth-child(even) td{background:#fafbfc}
+.scroll{max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+.controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.controls select,.controls input{padding:6px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px}
+.search{flex:1;min-width:160px}
+.footer{font-size:11px;color:var(--muted);text-align:center;margin-top:8px}
+.strategy-tag{font-size:11px;padding:2px 8px;border-radius:6px;background:#eef;white-space:nowrap}
+</style>
+</head>
+<body>
+<header>
+  <h1>🧪 Paper Trading Lab — Strategy Race</h1>
+  <div class="gen" id="generated"></div>
+</header>
+<main>
+  <div class="kpis" id="kpis"></div>
+
+  <div class="card"><h2>Equity Curves — portfolio value by strategy</h2>
+    <div class="chartbox"><canvas id="equityChart"></canvas></div></div>
+
+  <div class="card"><h2>Open Positions</h2>
+    <div class="scroll"><table id="positionsTable"><thead>
+      <tr><th>Opened</th><th>Strategy</th><th>Ticker</th><th>Qty</th><th>Entry</th><th>Stop</th><th>Target</th><th>Price</th><th>Value</th><th>P/L</th><th>Status</th></tr>
+    </thead><tbody></tbody></table></div></div>
+
+  <div class="card"><h2>Actions Log — every decision, reason, news & pre-action score</h2>
+    <div class="controls">
+      <select id="fStrategy"><option value="">All strategies</option></select>
+      <select id="fAction"><option value="">All actions</option><option>BUY</option><option>SELL</option><option>HOLD</option><option>INIT</option><option>CORRECTION</option><option>SIGNAL</option></select>
+      <input id="fSearch" class="search" placeholder="Search reason / news / ticker…">
+    </div>
+    <div class="scroll"><table id="actionsTable"><thead>
+      <tr><th>Date</th><th>Strategy</th><th>Action</th><th>Ticker</th><th>Qty</th><th>Price</th><th>Score</th><th>Reason</th><th>News</th></tr>
+    </thead><tbody></tbody></table></div></div>
+
+  <div class="footer">Paper money — simulated fills at real prices with 0.3% slippage and $5/side commission. Not investment advice.<br>
+  Data: lab.db (SQLite) · refreshed automatically by the Paper Trading Lab cron runs · <a href="https://github.com/elad-haviv/paper-trading-lab">source repo</a></div>
+</main>
+<script>
+const COLORS={'Momentum':'#2d4a7a','Mean Reversion':'#b26a00','Event-Driven':'#1a7f37','SPY benchmark':'#888'};
+function fmt(n){return n==null?'—':Number(n).toLocaleString('en-US',{maximumFractionDigits:2})}
+function badge(txt){const t=(txt||'').toUpperCase();const cls=t.includes('BUY')?'buy':t.includes('SELL')?'sell':'hold';return `<span class="badge ${cls}">${txt}</span>`}
+fetch('data.json?'+Date.now()).then(r=>r.json()).then(D=>{
+  document.getElementById('generated').textContent='Data generated: '+D.generated;
+
+  // KPIs
+  const k=document.getElementById('kpis');
+  const total=Object.entries(D.latest).filter(([s])=>s!=='SPY benchmark').reduce((a,[,v])=>a+v,0);
+  const spy=D.latest['SPY benchmark']||1000;
+  const entries=Object.entries(D.latest).filter(([s])=>s!=='SPY benchmark')
+    .map(([s,v])=>[s,v,(v/1000-1)*100]).sort((a,b)=>b[2]-a[2]);
+  const best=entries[0], worst=entries[entries.length-1];
+  const openPos=D.positions.filter(p=>p.status==='OPEN');
+  const pl=openPos.reduce((a,p)=>a+(p.pl||0),0);
+  k.innerHTML=`
+    <div class="kpi"><div class="l">Total value</div><div class="v">$${fmt(total)}</div></div>
+    <div class="kpi ${best[2]>=0?'pos':'neg'}"><div class="l">Best: ${best[0]}</div><div class="v">${best[2]>=0?'+':''}${best[2].toFixed(2)}%</div></div>
+    <div class="kpi ${worst[2]>=0?'pos':'neg'}"><div class="l">Worst: ${worst[0]}</div><div class="v">${worst[2]>=0?'+':''}${worst[2].toFixed(2)}%</div></div>
+    <div class="kpi"><div class="l">SPY benchmark</div><div class="v">${((spy/1000-1)*100).toFixed(2)}%</div></div>
+    <div class="kpi"><div class="l">Open P/L</div><div class="v">${pl<0?'−':'+'}$${fmt(Math.abs(pl))}</div></div>`;
+
+  // equity chart
+  const dates=[...new Set(D.equity.map(r=>r.date))];
+  const ds=Object.keys(COLORS).filter(s=>D.equity.some(r=>r.strategy===s)).map(s=>({
+    label:s, data:dates.map(d=>{const r=D.equity.find(x=>x.date===d&&x.strategy===s);return r?r.value:null}),
+    borderColor:COLORS[s], backgroundColor:COLORS[s]+'22', fill:false, tension:.15, borderWidth:2, pointRadius:2, spanGaps:true}));
+  new Chart(document.getElementById('equityChart'),{type:'line',
+    data:{labels:dates,datasets:ds},
+    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
+      scales:{y:{ticks:{callback:v=>'$'+v}}},plugins:{legend:{position:'bottom'}}}});
+
+  // positions
+  const pb=document.querySelector('#positionsTable tbody');
+  pb.innerHTML=D.positions.map(p=>`<tr>
+    <td>${p.opened}</td><td><span class="strategy-tag">${p.strategy}</span></td><td><b>${p.ticker}</b></td>
+    <td>${fmt(p.qty)}</td><td>$${fmt(p.entry_price)}</td><td>${p.stop?'$'+fmt(p.stop):'—'}</td><td>${p.target?'$'+fmt(p.target):'—'}</td>
+    <td>$${fmt(p.current_price)}</td><td>$${fmt(p.current_value)}</td>
+    <td class="${(p.pl||0)<0?'neg':'pos'}" style="color:${(p.pl||0)<0?'#c62828':'#1a7f37'}">${(p.pl||0)<0?'−':'+'}$${fmt(Math.abs(p.pl))} (${(p.pl_pct||0).toFixed(1)}%)</td>
+    <td><span class="badge ${p.status==='OPEN'?'open':'closed'}">${p.status}</span></td></tr>`).join('');
+
+  // actions filters
+  const sel=document.getElementById('fStrategy');
+  [...new Set(D.actions.map(a=>a.strategy))].forEach(s=>{const o=document.createElement('option');o.textContent=s;sel.appendChild(o)});
+  const ab=document.querySelector('#actionsTable tbody');
+  function renderActions(){
+    const fs=sel.value, fa=document.getElementById('fAction').value;
+    const q=document.getElementById('fSearch').value.toLowerCase();
+    const rows=D.actions.filter(a=>(!fs||a.strategy===fs)&&(!fa||(a.action||'').toUpperCase().startsWith(fa))&&
+      (!q||[a.reason,a.news,a.ticker,a.date].join(' ').toLowerCase().includes(q)));
+    ab.innerHTML=rows.map(a=>`<tr>
+      <td>${a.date}</td><td><span class="strategy-tag">${a.strategy}</span></td><td>${badge(a.action)}</td>
+      <td><b>${a.ticker}</b></td><td>${fmt(a.qty)}</td><td>${a.price?'$'+fmt(a.price):'—'}</td><td>${a.score??'—'}</td>
+      <td style="max-width:320px">${a.reason}</td><td style="max-width:320px;color:#556">${a.news}</td></tr>`).join('')||'<tr><td colspan="9">No matches.</td></tr>';
+  }
+  sel.onchange=renderActions;document.getElementById('fAction').onchange=renderActions;
+  document.getElementById('fSearch').oninput=renderActions;
+  renderActions();
+});
+</script>
+</body>
+</html>
